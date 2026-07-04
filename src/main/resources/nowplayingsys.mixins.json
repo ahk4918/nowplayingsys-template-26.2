@@ -1,0 +1,14 @@
+{
+	"required": true,
+	"package": "com.nowplaying.mixin",
+	"compatibilityLevel": "JAVA_25",
+	"mixins": [
+		"HudMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	},
+	"overwrites": {
+		"requireAnnotations": true
+	}
+}
