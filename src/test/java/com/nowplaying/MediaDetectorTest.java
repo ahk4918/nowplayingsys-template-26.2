@@ -5,11 +5,28 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MediaDetectorTest {
+    // Real dbus-send output format (condensed)
+    private static final String DBUS_METADATA =
+        "method return time=...\n" +
+        "   variant       dict entry(\n" +
+        "         string \"xesam:title\"\n" +
+        "         variant             string \"Test Track\"\n" +
+        "      )\n" +
+        "      dict entry(\n" +
+        "         string \"xesam:artist\"\n" +
+        "         variant             array [\n" +
+        "               string \"Example Artist\"\n" +
+        "            ]\n" +
+        "      )\n" +
+        "      dict entry(\n" +
+        "         string \"mpris:artUrl\"\n" +
+        "         variant             string \"https://i.scdn.co/image/abc123\"\n" +
+        "      )\n" +
+        "   )\n";
+
     @Test
     void parsesSimpleMetadata() {
-        String metadata = "title=\"Test Track\"\nartist=\"Example Artist\"";
-        String result = MediaDetector.extractTitle(metadata);
-        assertTrue(result.contains("Test Track"));
+        assertTrue(MediaDetector.extractTitle(DBUS_METADATA).contains("Test Track"));
     }
 
     @Test
@@ -17,10 +34,9 @@ class MediaDetectorTest {
         String metadata = "method return time=...\n"
             + "  variant dict entry(\n"
             + "    string \"xesam:title\"\n"
-            + "    variant string \"Night Drive\"\n"
+            + "    variant             string \"Night Drive\"\n"
             + "  )";
-        String result = MediaDetector.extractTitle(metadata);
-        assertTrue(result.contains("Night Drive"));
+        assertTrue(MediaDetector.extractTitle(metadata).contains("Night Drive"));
     }
 
     @Test
@@ -28,5 +44,10 @@ class MediaDetectorTest {
         String command = MediaDetector.buildMprisCommand("PlayPause");
         assertTrue(command.contains("PlayPause"));
         assertTrue(command.contains("org.mpris.MediaPlayer2.Player"));
+    }
+
+    @Test
+    void extractsArtistFromMetadata() {
+        assertTrue(MediaDetector.extractArtist(DBUS_METADATA).contains("Example Artist"));
     }
 }

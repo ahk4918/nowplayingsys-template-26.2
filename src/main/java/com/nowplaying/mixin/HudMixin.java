@@ -36,6 +36,5 @@ public class HudMixin {
         }
 
         extractor.text(client.font, hudText, 8, 8, HUD_COLOR);
-        NowPlayingToast.render(client, extractor);
     }
 }
