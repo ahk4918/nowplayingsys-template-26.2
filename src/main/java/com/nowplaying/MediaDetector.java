@@ -13,6 +13,7 @@ import java.util.regex.Pattern;
 
 public class MediaDetector {
     private static final int COMMAND_TIMEOUT = 3;
+    private static final String WINDOWS_METADATA_SEPARATOR = "|||";
 
     // Robust multi-line block parsers for Linux MPRIS D-Bus output
     private static final Pattern TITLE_BLOCK_PATTERN = Pattern.compile(
@@ -74,7 +75,7 @@ public class MediaDetector {
                 // Running under Wine on Linux — use MPRIS/D-Bus instead of PowerShell
                 currentMetadata = getLinuxMediaMetadata();
             } else if (os.contains("win")) {
-                currentMetadata = getWindowsMediaMetadata();
+                currentMetadata = isWindows10OrNewer() ? getWindowsMediaMetadata() : new MediaMetadata("Windows", "", "", "");
             } else if (os.contains("mac")) {
                 currentMetadata = getMacMediaMetadata();
             } else {
@@ -142,33 +143,108 @@ public class MediaDetector {
 
     private static MediaMetadata getWindowsMediaMetadata() throws IOException, InterruptedException {
         String tmpPath = new File(System.getProperty("java.io.tmpdir"), "mcmusic_art.jpg").getAbsolutePath().replace("\\", "/");
-        
-        String psScript = "$s = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync().GetAwaiter().GetResult().GetCurrentSession(); " +
-                          "if ($s) { " +
-                          "  $p = $s.TryGetMediaPropertiesAsync().GetAwaiter().GetResult(); " +
-                          "  $artUrl = ''; " +
-                          "  if ($p.Thumbnail) { " +
-                          "    $stream = $p.Thumbnail.OpenReadAsync().GetAwaiter().GetResult(); " +
-                          "    $buffer = New-Object Byte[] $stream.Size; " +
-                          "    $reader = New-Object Windows.Storage.Streams.DataReader $stream; " +
-                          "    $reader.LoadAsync($stream.Size).GetAwaiter().GetResult(); " +
-                          "    $reader.ReadBytes($buffer); " +
-                          "    [System.IO.File]::WriteAllBytes('" + tmpPath + "', $buffer); " +
-                          "    $artUrl = 'file://" + tmpPath + "'; " +
-                          "  }; " +
-                          "  Write-Output ($p.Title + '|||' + $p.Artist + '|||' + $artUrl) " +
-                          "}";
-        
+
+        String psScript = buildWindowsPowerShellScript(tmpPath);
+
         String output = runCommand(new String[]{"powershell", "-NoProfile", "-Command", psScript});
-        
-        if (!output.equals("Error") && !output.isBlank()) {
-            String[] parts = output.split("\\|\\|\\|");
+
+        return parseWindowsMetadataOutput(output);
+    }
+
+    static String buildWindowsPowerShellScript(String tmpPath) {
+        String safeTmpPath = tmpPath.replace("'", "''");
+        return "$ErrorActionPreference='Stop'; " +
+               "try { " +
+               "  Add-Type -AssemblyName System.Runtime.WindowsRuntime; " +
+               "  [void][Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, ContentType=WindowsRuntime]; " +
+               "  [void][Windows.Storage.Streams.DataReader, Windows, ContentType=WindowsRuntime]; " +
+               "  $managerTask = [System.WindowsRuntimeSystemExtensions]::AsTask([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()); " +
+               "  $manager = $managerTask.GetAwaiter().GetResult(); " +
+               "  if (-not $manager) { return }; " +
+               "  $sessions = $manager.GetSessions(); " +
+               "  $session = $null; " +
+               "  foreach ($candidate in $sessions) { " +
+               "    $playback = $candidate.GetPlaybackInfo(); " +
+               "    if ($playback -and $playback.PlaybackStatus -eq [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionPlaybackStatus]::Playing) { " +
+               "      $session = $candidate; break; " +
+               "    } " +
+               "  } " +
+               "  if (-not $session) { $session = $manager.GetCurrentSession(); } " +
+               "  if (-not $session -and $sessions.Count -gt 0) { $session = $sessions[0]; } " +
+               "  if (-not $session) { return }; " +
+               "  $propsTask = [System.WindowsRuntimeSystemExtensions]::AsTask($session.TryGetMediaPropertiesAsync()); " +
+               "  $props = $propsTask.GetAwaiter().GetResult(); " +
+               "  if (-not $props) { return }; " +
+               "  $title = if ($props.Title) { [string]$props.Title } else { '' }; " +
+               "  $artist = if ($props.Artist) { [string]$props.Artist } else { '' }; " +
+               "  $artUrl = ''; " +
+               "  if ($props.Thumbnail) { " +
+               "    $streamTask = [System.WindowsRuntimeSystemExtensions]::AsTask($props.Thumbnail.OpenReadAsync()); " +
+               "    $stream = $streamTask.GetAwaiter().GetResult(); " +
+               "    if ($stream) { " +
+               "      $size = [int]$stream.Size; " +
+               "      if ($size -gt 0) { " +
+               "        $reader = New-Object Windows.Storage.Streams.DataReader($stream); " +
+               "        try { " +
+               "          $loadTask = [System.WindowsRuntimeSystemExtensions]::AsTask($reader.LoadAsync($size)); " +
+               "          $null = $loadTask.GetAwaiter().GetResult(); " +
+               "          $buffer = New-Object byte[] $size; " +
+               "          $reader.ReadBytes($buffer); " +
+               "          [System.IO.File]::WriteAllBytes('" + safeTmpPath + "', $buffer); " +
+               "          $artUrl = ('file:///' + '" + safeTmpPath + "'.Replace('\\', '/')); " +
+               "        } finally { $reader.Dispose(); $stream.Dispose(); } " +
+               "      } " +
+               "    } " +
+               "  } " +
+               "  Write-Output ($title + '" + WINDOWS_METADATA_SEPARATOR + "' + $artist + '" + WINDOWS_METADATA_SEPARATOR + "' + $artUrl); " +
+               "} catch { }";
+    }
+
+    static MediaMetadata parseWindowsMetadataOutput(String output) {
+        if (output == null || output.equals("Error") || output.isBlank()) {
+            return new MediaMetadata("None", "", "", "");
+        }
+
+        String[] lines = output.split("\\R");
+        for (int i = lines.length - 1; i >= 0; i--) {
+            String line = lines[i].trim();
+            if (!line.contains(WINDOWS_METADATA_SEPARATOR)) {
+                continue;
+            }
+
+            String[] parts = line.split("\\Q" + WINDOWS_METADATA_SEPARATOR + "\\E", 3);
             String title = parts.length > 0 ? parts[0].trim() : "";
             String artist = parts.length > 1 ? parts[1].trim() : "";
             String artUrl = parts.length > 2 ? parts[2].trim() : "";
-            if (!title.isEmpty()) return new MediaMetadata("Windows", title, artist, artUrl);
+            if (!title.isEmpty()) {
+                return new MediaMetadata("Windows", title, artist, artUrl);
+            }
         }
+
         return new MediaMetadata("None", "", "", "");
+    }
+
+    static boolean isWindows10OrNewer() {
+        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+        if (!os.contains("win")) {
+            return false;
+        }
+
+        String version = System.getProperty("os.version", "0");
+        String[] tokens = version.split("\\.");
+        int major = parseIntOrDefault(tokens.length > 0 ? tokens[0] : "0", 0);
+        int minor = parseIntOrDefault(tokens.length > 1 ? tokens[1] : "0", 0);
+
+        // Win10 reports 10.0, Win11 also reports 10.0 with modern builds.
+        return major > 10 || (major == 10 && minor >= 0);
+    }
+
+    private static int parseIntOrDefault(String raw, int fallback) {
+        try {
+            return Integer.parseInt(raw);
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
     }
 
     private static MediaMetadata getMacMediaMetadata() throws IOException, InterruptedException {
