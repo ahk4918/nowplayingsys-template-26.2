@@ -60,10 +60,18 @@ public class MediaDetector {
         } catch (Exception ignored) {}
     }
 
+    private static boolean isRunningUnderWine() {
+        return System.getenv("WINEPREFIX") != null || System.getenv("WINE") != null
+                || System.getenv("WINELOADER") != null;
+    }
+
     private static void pollMetadata() {
         String os = System.getProperty("os.name").toLowerCase(Locale.ROOT);
         try {
             if (os.contains("linux")) {
+                currentMetadata = getLinuxMediaMetadata();
+            } else if (os.contains("win") && isRunningUnderWine()) {
+                // Running under Wine on Linux — use MPRIS/D-Bus instead of PowerShell
                 currentMetadata = getLinuxMediaMetadata();
             } else if (os.contains("win")) {
                 currentMetadata = getWindowsMediaMetadata();
