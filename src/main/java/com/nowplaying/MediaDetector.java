@@ -13,7 +13,9 @@ import java.util.regex.Pattern;
 
 public class MediaDetector {
     private static final int COMMAND_TIMEOUT = 3;
+    private static final int WINDOWS_COMMAND_TIMEOUT = 10;
     private static final String WINDOWS_METADATA_SEPARATOR = "|||";
+    private static final String WINDOWS_DBUS_TCP_ADDRESS = "tcp:host=127.0.0.1,port=12434";
 
     // Robust multi-line block parsers for Linux MPRIS D-Bus output
     private static final Pattern TITLE_BLOCK_PATTERN = Pattern.compile(
@@ -66,6 +68,23 @@ public class MediaDetector {
                 || System.getenv("WINELOADER") != null;
     }
 
+    private static boolean isWindowsOs() {
+        return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
+    }
+
+    private static String getDbusSendPrefix() {
+        if (!isWindowsOs()) {
+            return "dbus-send --print-reply";
+        }
+
+        // On Windows, DBus is typically exposed via a TCP bridge instead of a Unix socket.
+        String address = System.getenv("NOWPLAYING_DBUS_TCP_ADDRESS");
+        if (address == null || address.isBlank()) {
+            address = WINDOWS_DBUS_TCP_ADDRESS;
+        }
+        return "dbus-send --address='" + address + "' --print-reply";
+    }
+
     private static void pollMetadata() {
         String os = System.getProperty("os.name").toLowerCase(Locale.ROOT);
         try {
@@ -88,7 +107,8 @@ public class MediaDetector {
 
     public static String buildMprisCommand(String method) {
         return String.format(
-            "dbus-send --print-reply --dest=%s /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player.%s 2>/dev/null",
+            "%s --dest=%s /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player.%s 2>/dev/null",
+            getDbusSendPrefix(),
             activeMprisPlayer, method
         );
     }
@@ -123,7 +143,7 @@ public class MediaDetector {
     private static String[] listMprisPlayers() throws IOException, InterruptedException {
         String namesOutput = runCommand(new String[]{
             "bash", "-c",
-            "dbus-send --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.ListNames 2>/dev/null"
+            getDbusSendPrefix() + " --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.ListNames 2>/dev/null"
         });
         if (namesOutput.equals("Error")) return new String[0];
 
@@ -135,7 +155,7 @@ public class MediaDetector {
     private static MediaMetadata getLinuxMetadataFromPlayer(String player, String source) throws IOException, InterruptedException {
         String output = runCommand(new String[]{
             "bash", "-c",
-            "dbus-send --print-reply --dest=" + player + " /org/mpris/MediaPlayer2 " +
+            getDbusSendPrefix() + " --dest=" + player + " /org/mpris/MediaPlayer2 " +
             "org.freedesktop.DBus.Properties.Get string:org.mpris.MediaPlayer2.Player string:Metadata 2>/dev/null"
         });
         return new MediaMetadata(source, extractTitle(output), extractArtist(output), extractArtUrl(output));
@@ -146,9 +166,20 @@ public class MediaDetector {
 
         String psScript = buildWindowsPowerShellScript(tmpPath);
 
-        String output = runCommand(new String[]{"powershell", "-NoProfile", "-Command", psScript});
+        String output = runWindowsPowerShell(psScript);
 
         return parseWindowsMetadataOutput(output);
+    }
+
+    static String runWindowsPowerShell(String script) throws IOException, InterruptedException {
+        String[] executables = {"powershell", "powershell.exe", "pwsh", "pwsh.exe"};
+        for (String executable : executables) {
+            String output = runCommand(new String[]{executable, "-NoProfile", "-Command", script}, WINDOWS_COMMAND_TIMEOUT);
+            if (!"Error".equals(output)) {
+                return output;
+            }
+        }
+        return "Error";
     }
 
     static String buildWindowsPowerShellScript(String tmpPath) {
@@ -256,8 +287,12 @@ public class MediaDetector {
     }
 
     private static String runCommand(String[] command) throws IOException, InterruptedException {
+        return runCommand(command, COMMAND_TIMEOUT);
+    }
+
+    private static String runCommand(String[] command, int timeoutSeconds) throws IOException, InterruptedException {
         Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
-        if (!process.waitFor(COMMAND_TIMEOUT, TimeUnit.SECONDS)) {
+        if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
             process.destroyForcibly();
             return "Error";
         }

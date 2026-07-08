@@ -21,7 +21,8 @@ dependencies {
 
 	// Fabric API. This is technically optional, but you probably want it anyway.
 	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
-	implementation "com.github.hypfvieh:dbus-java:3.3.2"
+	implementation "com.github.hypfvieh:dbus-java-core:5.2.0"
+	implementation "com.github.hypfvieh:dbus-java-transport-tcp:5.2.0"
 
 	testImplementation platform("org.junit:junit-bom:5.10.2")
 	testImplementation "org.junit.jupiter:junit-jupiter"

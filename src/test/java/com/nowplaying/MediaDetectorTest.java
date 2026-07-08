@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MediaDetectorTest {
@@ -74,6 +75,7 @@ class MediaDetectorTest {
     @Test
     void buildsWindowsScriptWithWinRtBootstrap() {
         String script = MediaDetector.buildWindowsPowerShellScript("C:/Temp/mcmusic_art.jpg");
+        assertNotNull(script);
         assertTrue(script.contains("System.Runtime.WindowsRuntime"));
         assertTrue(script.contains("GlobalSystemMediaTransportControlsSessionManager"));
         assertTrue(script.contains("Write-Output"));
