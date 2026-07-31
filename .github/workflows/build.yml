@@ -28,3 +28,20 @@ jobs:
         with:
           name: Artifacts
           path: build/libs/
+
+# publish artifacts to latest release upon creation
+
+  publish:
+    runs-on: ubuntu-24.04
+    needs: build
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v6
+      - name: download build artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: Artifacts
+      - name: publish to release
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: build/libs/
